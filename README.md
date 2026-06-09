@@ -30,7 +30,7 @@ gcloud run deploy jules-mcp-server \
 **Google Cloud Console Settings**:
 - **Build type**: Google Cloud buildpacks / native runtime
 - **Build context directory**: `/`
-- **Entrypoint**: Can be left empty because `Procfile` is present. Otherwise: `uvicorn jules_mcp_server.main:app --host 0.0.0.0 --port $PORT`
+- **Entrypoint**: Can be left empty because `Procfile` is present. Otherwise: `uvicorn jules_mcp_server.main:app --host 0.0.0.0 --port $PORT --lifespan on`
 
 ### Docker Build (Optional)
 
