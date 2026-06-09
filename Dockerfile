@@ -18,4 +18,4 @@ RUN pip install --no-cache-dir .
 EXPOSE 8080
 
 # Run the FastAPI server via Uvicorn
-CMD ["sh", "-c", "uvicorn jules_mcp_server.main:app --host ${HOST:-0.0.0.0} --port ${PORT:-8080}"]
+CMD ["sh", "-c", "uvicorn jules_mcp_server.main:app --host ${HOST:-0.0.0.0} --port ${PORT:-8080} --lifespan on"]
