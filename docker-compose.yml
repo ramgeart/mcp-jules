@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  mcp-server:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - JULES_API_BASE=https://jules.googleapis.com/v1alpha
