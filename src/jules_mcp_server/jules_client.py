@@ -5,13 +5,22 @@ import asyncio
 from typing import Any, Dict, Optional
 from .auth import get_api_key
 
+import time
+
 # Default API base for Jules
 JULES_API_BASE = os.environ.get("JULES_API_BASE", "https://jules.googleapis.com/v1alpha")
+
+# Shared client to reuse connections and avoid socket exhaustion
+_client = httpx.AsyncClient(timeout=60.0)
 
 def validate_resource_name(name: str) -> str:
     """Validate and clean up resource names before making a request."""
     if not isinstance(name, str):
         raise ValueError("Resource name must be a string")
+
+    name = name.strip()
+    if not name:
+        raise ValueError("Resource name cannot be empty")
 
     # Strip leading slash
     if name.startswith("/"):
@@ -20,9 +29,30 @@ def validate_resource_name(name: str) -> str:
     if ".." in name:
         raise ValueError("Invalid resource name: contains '..'")
 
+    if "?" in name or "#" in name or "\\" in name or "//" in name:
+        raise ValueError("Invalid resource name: contains illegal characters")
+
     if name.startswith("http://") or name.startswith("https://"):
         raise ValueError("Invalid resource name: looks like a full URL")
 
+    return name
+
+def validate_source_name(name: str) -> str:
+    name = validate_resource_name(name)
+    if not name.startswith("sources/"):
+        raise ValueError("Source name must start with 'sources/'")
+    return name
+
+def validate_session_name(name: str) -> str:
+    name = validate_resource_name(name)
+    if not name.startswith("sessions/"):
+        raise ValueError("Session name must start with 'sessions/'")
+    return name
+
+def validate_activity_name(name: str) -> str:
+    name = validate_resource_name(name)
+    if not name.startswith("sessions/") or "/activities/" not in name:
+        raise ValueError("Activity name must match 'sessions/.../activities/...'")
     return name
 
 def build_url(resource_name: str) -> str:
@@ -87,38 +117,36 @@ async def make_jules_request(
     }
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.request(
-                method=method,
-                url=url,
-                headers=headers,
-                params=params,
-                json=json_data,
-                timeout=60.0
+        response = await _client.request(
+            method=method,
+            url=url,
+            headers=headers,
+            params=params,
+            json=json_data
+        )
+
+        if response.status_code >= 400:
+            try:
+                error_data = response.json()
+            except ValueError:
+                error_data = {"raw_text": response.text}
+
+            return format_error(
+                response.status_code,
+                "Jules API Error",
+                error_data
             )
 
-            if response.status_code >= 400:
-                try:
-                    error_data = response.json()
-                except ValueError:
-                    error_data = {"raw_text": response.text}
+        try:
+            data = response.json()
+        except ValueError:
+            data = {}
 
-                return format_error(
-                    response.status_code,
-                    "Jules API Error",
-                    error_data
-                )
-
-            try:
-                data = response.json()
-            except ValueError:
-                data = {}
-
-            # We also redact successful tool responses just in case
-            return {
-                "ok": True,
-                "data": redact_secrets(data)
-            }
+        # We also redact successful tool responses just in case
+        return {
+            "ok": True,
+            "data": redact_secrets(data)
+        }
 
     except httpx.RequestError as e:
         return format_error(500, "Internal Server Error", {"message": f"HTTP request failed: {type(e).__name__}"})
@@ -133,7 +161,10 @@ async def list_sources() -> Dict[str, Any]:
     return await make_jules_request("GET", "sources")
 
 async def get_source(name: str) -> Dict[str, Any]:
-    return await make_jules_request("GET", name)
+    try:
+        return await make_jules_request("GET", validate_source_name(name))
+    except ValueError as e:
+        return format_error(400, "Bad Request", {"message": str(e)})
 
 async def create_session(
     source: str,
@@ -144,9 +175,14 @@ async def create_session(
     automation_mode: Optional[str] = None
 ) -> Dict[str, Any]:
 
+    try:
+        clean_source = validate_source_name(source)
+    except ValueError as e:
+        return format_error(400, "Bad Request", {"message": str(e)})
+
     payload = {
         "sourceContext": {
-            "source": validate_resource_name(source),
+            "source": clean_source,
             "githubRepoContext": {
                 "startingBranch": starting_branch
             }
@@ -170,22 +206,40 @@ async def list_sessions(page_size: int = 50, page_token: str = "") -> Dict[str, 
     return await make_jules_request("GET", "sessions", params=params)
 
 async def get_session(session: str) -> Dict[str, Any]:
-    return await make_jules_request("GET", session)
+    try:
+        return await make_jules_request("GET", validate_session_name(session))
+    except ValueError as e:
+        return format_error(400, "Bad Request", {"message": str(e)})
 
 async def send_message(session: str, prompt: str) -> Dict[str, Any]:
-    return await make_jules_request("POST", f"{validate_resource_name(session)}:sendMessage", json_data={"prompt": prompt})
+    try:
+        return await make_jules_request("POST", f"{validate_session_name(session)}:sendMessage", json_data={"prompt": prompt})
+    except ValueError as e:
+        return format_error(400, "Bad Request", {"message": str(e)})
 
 async def approve_plan(session: str) -> Dict[str, Any]:
-    return await make_jules_request("POST", f"{validate_resource_name(session)}:approvePlan")
+    try:
+        return await make_jules_request("POST", f"{validate_session_name(session)}:approvePlan")
+    except ValueError as e:
+        return format_error(400, "Bad Request", {"message": str(e)})
 
 async def list_activities(session: str, page_size: int = 50, page_token: str = "") -> Dict[str, Any]:
+    try:
+        clean_session = validate_session_name(session)
+    except ValueError as e:
+        return format_error(400, "Bad Request", {"message": str(e)})
+
+    page_size = max(1, min(page_size, 100))
     params = {"pageSize": page_size}
     if page_token:
         params["pageToken"] = page_token
-    return await make_jules_request("GET", f"{validate_resource_name(session)}/activities", params=params)
+    return await make_jules_request("GET", f"{clean_session}/activities", params=params)
 
 async def get_activity(activity: str) -> Dict[str, Any]:
-    return await make_jules_request("GET", activity)
+    try:
+        return await make_jules_request("GET", validate_activity_name(activity))
+    except ValueError as e:
+        return format_error(400, "Bad Request", {"message": str(e)})
 
 async def wait_for_activity(
     session: str,
@@ -198,13 +252,15 @@ async def wait_for_activity(
     Polls the session and activities until a terminal state is reached,
     a timeout occurs, or match_text is found in a new activity.
     """
-    # Cap timeout
-    timeout_seconds = min(timeout_seconds, 1800)
+    # Cap timeout and enforce minimum poll interval
+    timeout_seconds = max(1, min(timeout_seconds, 1800))
+    poll_interval_seconds = max(1, min(poll_interval_seconds, 300))
+    page_size = max(1, min(page_size, 100))
 
-    start_time = asyncio.get_event_loop().time()
+    start_time = time.monotonic()
 
     while True:
-        current_time = asyncio.get_event_loop().time()
+        current_time = time.monotonic()
         if (current_time - start_time) >= timeout_seconds:
             # Fetch latest to return something useful
             sess_res = await get_session(session)

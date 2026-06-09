@@ -1,7 +1,6 @@
 import contextvars
-from fastapi import Request, HTTPException
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp, Scope, Receive, Send
 
 # Context variable to hold the X-Goog-Api-Key
 # Default to None, so we know if it was not provided
@@ -11,22 +10,30 @@ def get_api_key() -> str | None:
     """Retrieve the current Jules API key from the context."""
     return jules_api_key_var.get()
 
-class APIKeyMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
+class APIKeyMiddleware:
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
         # Allow /health endpoint to pass without auth
-        if request.url.path == "/health":
-            return await call_next(request)
+        if scope.get("path") == "/health":
+            await self.app(scope, receive, send)
+            return
 
         # Extract the key from headers
-        # ChatGPT sends X-Goog-Api-Key
-        api_key = request.headers.get("X-Goog-Api-Key")
+        api_key = None
+        headers = scope.get("headers", [])
+        for key, value in headers:
+            if key.lower() == b"x-goog-api-key":
+                api_key = value.decode("utf-8", errors="ignore")
+                break
 
         if not api_key:
-            # We return a structured JSON response to conform with tool expectations
-            # if they directly hit MCP endpoints and need auth checking at HTTP level.
-            # However, for MCP endpoints, missing auth should fail before reaching tools.
-            # We fail with structured auth error as requested.
-            return JSONResponse(
+            response = JSONResponse(
                 status_code=401,
                 content={
                     "ok": False,
@@ -37,11 +44,12 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
                     }
                 }
             )
+            await response(scope, receive, send)
+            return
 
         # Set context variable for this request
         token = jules_api_key_var.set(api_key)
         try:
-            response = await call_next(request)
-            return response
+            await self.app(scope, receive, send)
         finally:
             jules_api_key_var.reset(token)
