@@ -122,7 +122,15 @@ async def jules_cancel_session(session: str) -> str:
 # FastAPI Application setup
 # ---------------------------------------------------------
 
-app = FastAPI(title="Jules MCP Server")
+# The fastmcp HTTP application defines the underlying FastMCP ASGI lifespan and handles routes.
+# Because we mount this on the `/mcp` route inside FastAPI, we specify `path="/"` here.
+fastmcp_app = mcp.http_app(path="/")
+
+# Map FastMCP lifespan into the parent FastAPI application so task groups initialize.
+app = FastAPI(
+    title="Jules MCP Server",
+    lifespan=fastmcp_app.lifespan,
+)
 
 # Add authentication middleware using the properly formulated ASGI wrapper
 app.add_middleware(APIKeyMiddleware)
@@ -132,10 +140,5 @@ async def health():
     """Health check endpoint."""
     return {"ok": True}
 
-# FastMCP typically mounts itself on a fastAPI application when configured.
-# Depending on fastmcp version/API, we need to add the routes.
-# The fastmcp library from PrefectHQ typically provides ways to mount via SSE.
-# Since we only want `/mcp`, we mount `mcp.http_app()` at the root directly.
-# This exposes the underlying `fastmcp` application (including /sse and /messages) naturally.
-fastmcp_app = mcp.http_app()
-app.mount("/", fastmcp_app)
+# Mount the FastMCP application on `/mcp`
+app.mount("/mcp", fastmcp_app)
