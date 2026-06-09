@@ -110,8 +110,11 @@ async def jules_wait_for_activity(
 async def jules_cancel_session(session: str) -> str:
     """Cancel a Jules session."""
     return json.dumps({
-        "supported": False,
-        "message": "The public Jules API does not expose a documented cancel/stop endpoint in this implementation."
+        "ok": True,
+        "data": {
+            "supported": False,
+            "message": "The public Jules API does not expose a documented cancel/stop endpoint in this implementation."
+        }
     })
 
 
@@ -121,7 +124,7 @@ async def jules_cancel_session(session: str) -> str:
 
 app = FastAPI(title="Jules MCP Server")
 
-# Add authentication middleware
+# Add authentication middleware using the properly formulated ASGI wrapper
 app.add_middleware(APIKeyMiddleware)
 
 @app.get("/health")
@@ -129,9 +132,10 @@ async def health():
     """Health check endpoint."""
     return {"ok": True}
 
-# Mount FastMCP HTTP app on standard paths. The fastmcp `.http_app()` method
-# returns a Starlette ASGI app which exposes its own SSE routes at /sse and /messages.
-# Since the goal is `/mcp` and `/sse`, we mount the mcp.http_app().
+# FastMCP typically mounts itself on a fastAPI application when configured.
+# Depending on fastmcp version/API, we need to add the routes.
+# The fastmcp library from PrefectHQ typically provides ways to mount via SSE.
+# Since we only want `/mcp`, we mount `mcp.http_app()` at the root directly.
+# This exposes the underlying `fastmcp` application (including /sse and /messages) naturally.
 fastmcp_app = mcp.http_app()
-app.mount("/mcp", fastmcp_app)
-app.mount("/sse", fastmcp_app)
+app.mount("/", fastmcp_app)
