@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: mcp-jules
+    env: python
+    buildCommand: pip install -e .
+    startCommand: uvicorn jules_mcp_server.main:app --host 0.0.0.0 --port $PORT --lifespan on
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: JULES_API_BASE
+        value: https://jules.googleapis.com/v1alpha
